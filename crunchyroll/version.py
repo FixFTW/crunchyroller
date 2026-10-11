@@ -93,3 +93,41 @@ def check_for_updates(
     _VERSION_CACHE["checked_at"] = now
     _VERSION_CACHE["data"] = result
     return result
+
+
+_STARS_CACHE: Dict[str, Any] = {
+    "checked_at": 0.0,
+    "stars": None,
+}
+
+
+def get_github_stars(force: bool = False, timeout: float = 5.0) -> int:
+    """Queries GitHub API to get live stargazer count for the repository, cached for 10 minutes."""
+    global _STARS_CACHE
+    now = time.time()
+    if not force and _STARS_CACHE["stars"] is not None and (now - _STARS_CACHE["checked_at"] < 600):
+        return _STARS_CACHE["stars"]
+
+    url = f"https://api.github.com/repos/{GITHUB_REPO}"
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": f"crunchyroller/{__version__}",
+                "Accept": "application/vnd.github.v3+json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status == 200:
+                payload = json.loads(resp.read().decode("utf-8"))
+                stars = int(payload.get("stargazers_count", 0))
+                _STARS_CACHE["stars"] = stars
+                _STARS_CACHE["checked_at"] = now
+                return stars
+    except Exception as e:
+        logger.debug("Failed to fetch GitHub stars: %s", e)
+
+    if _STARS_CACHE["stars"] is not None:
+        return _STARS_CACHE["stars"]
+    return 0
+

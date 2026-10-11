@@ -1,19 +1,21 @@
+import concurrent.futures
 import http.server
 import json
 import logging
 import os
 import random
+import re
 import subprocess
 import sys
 import threading
 import time
-import webbrowser
-from typing import Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
+import webbrowser
 
 from crunchyroll import __version__
 from crunchyroll.logger import get_default_log_dir, get_log_path, is_logging_enabled, set_logging_enabled, setup_logging
-from crunchyroll.version import check_for_updates
+from crunchyroll.version import check_for_updates, get_github_stars
 
 # Ensure pywebview uses PyQt6 on Linux when available
 os.environ.setdefault("QT_API", "pyqt6")
@@ -61,6 +63,7 @@ from crunchyroll.api import (
     get_series,
     parse_url_type,
     purge_orphan_streams,
+    search_series,
 )
 from crunchyroll.auth import load_config, save_config
 from crunchyroll.downloader import download_episode
@@ -595,20 +598,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             auth_type = get_auth_type()
             with LOCK:
                 q_state = QUEUE.get_state()
-                if QUEUE.active_job or len(QUEUE.queue) > 0 or QUEUE.completed_batch_count > 0:
-                    STATE["download"].update({
-                        "status": q_state["status"],
-                        "episode": q_state["episode"],
-                        "track": q_state["track"],
-                        "segs_done": q_state["segs_done"],
-                        "segs_total": q_state["segs_total"],
-                        "speed": q_state["speed"],
-                        "overall_pct": q_state["overall_pct"],
-                        "track_pct": q_state["track_pct"],
-                        "ep_idx": q_state["ep_idx"],
-                        "ep_total": q_state["ep_total"],
-                        "complete_file": q_state["complete_file"],
-                    })
+                STATE["download"].update({
+                    "status": q_state["status"],
+                    "episode": q_state["episode"],
+                    "track": q_state["track"],
+                    "segs_done": q_state["segs_done"],
+                    "segs_total": q_state["segs_total"],
+                    "speed": q_state["speed"],
+                    "overall_pct": q_state["overall_pct"],
+                    "track_pct": q_state["track_pct"],
+                    "ep_idx": q_state["ep_idx"],
+                    "ep_total": q_state["ep_total"],
+                    "complete_file": q_state["complete_file"],
+                })
                 STATE["download"]["queue"] = q_state["queue"]
                 STATE["download"]["queued_count"] = q_state["queued_count"]
                 STATE["download"]["active_job"] = q_state["active_job"]
@@ -752,6 +754,36 @@ class Handler(http.server.BaseHTTPRequestHandler):
             force = query.get("force", ["0"])[0] in ("1", "true", "True")
             update_info = check_for_updates(force=force)
             self._json({"success": True, **update_info})
+            return
+
+        elif path == "/api/stars":
+            query = parse_qs(parsed_url.query)
+            force = query.get("force", ["0"])[0] in ("1", "true", "True")
+            stars = get_github_stars(force=force)
+            self._json({"success": True, "stars": stars})
+            return
+
+        elif path == "/api/search":
+            query = parse_qs(parsed_url.query)
+            q = query.get("q", [""])[0].strip()
+            if not q:
+                self._json({"success": True, "results": [], "count": 0})
+                return
+            limit = 15
+            try:
+                limit = max(1, min(50, int(query.get("n", ["15"])[0])))
+            except (ValueError, TypeError):
+                limit = 15
+            with LOCK:
+                subs_lang = STATE["config"].get("subs_lang", "en-US")
+            locale = subs_lang if subs_lang and subs_lang.lower() not in ("all", "*") else "en-US"
+            try:
+                client = CrunchyrollHttpClient()
+                results = search_series(client, q, limit=limit, locale=locale)
+                self._json({"success": True, "query": q, "results": results, "count": len(results)})
+            except Exception as e:
+                logger.error("Search failed for query %s: %s", q, e, exc_info=True)
+                self._json({"success": False, "error": str(e), "results": []}, 500)
             return
 
         elif path in (
@@ -954,41 +986,82 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._json({"success": False, "error": "No directory selected", "cancelled": True})
             return
 
-        elif path == "/api/fetch":
-            url = data.get("url","").strip()
-            if not url: self._json({"success":False,"error":"url required"},400); return
-            if not is_authenticated():
-                self._json({"success":False,"error":"not logged in"},401); return
+        elif path == "/api/search":
+            q = str(data.get("q", "")).strip()
+            if not q:
+                self._json({"success": True, "results": [], "count": 0})
+                return
+            limit = 15
+            try:
+                limit = max(1, min(50, int(data.get("n", 15))))
+            except (ValueError, TypeError):
+                limit = 15
+            with LOCK:
+                subs_lang = STATE["config"].get("subs_lang", "en-US")
+            locale = subs_lang if subs_lang and subs_lang.lower() not in ("all", "*") else "en-US"
             try:
                 client = CrunchyrollHttpClient()
-                kind, cid = parse_url_type(url)
-                al, sl = STATE["config"].get("audio_lang", "ja-JP"), STATE["config"].get("subs_lang", "en-US")
-                al_list = [x.strip() for x in al.split(",") if x.strip()]
-                sl_list = [x.strip() for x in sl.split(",") if x.strip()]
-                primary_al = al_list[0] if al_list else "ja-JP"
-                primary_sl = sl_list[0] if sl_list else "en-US"
+                results = search_series(client, q, limit=limit, locale=locale)
+                self._json({"success": True, "query": q, "results": results, "count": len(results)})
+            except Exception as e:
+                logger.error("Search failed for query %s: %s", q, e, exc_info=True)
+                self._json({"success": False, "error": str(e), "results": []}, 500)
+            return
+
+        elif path == "/api/fetch":
+            raw_urls = data.get("urls") or data.get("url") or []
+            if isinstance(raw_urls, str):
+                split_items = re.split(r"[\r\n,;]+", raw_urls)
+                urls = [u.strip() for u in split_items if u.strip()]
+            elif isinstance(raw_urls, list):
+                urls = [str(u).strip() for u in raw_urls if str(u).strip()]
+            else:
+                urls = []
+
+            # Deduplicate while preserving order
+            seen_urls = set()
+            clean_urls = []
+            for u in urls:
+                if u not in seen_urls:
+                    seen_urls.add(u)
+                    clean_urls.append(u)
+
+            if not clean_urls:
+                self._json({"success": False, "error": "url required"}, 400)
+                return
+
+            def _fetch_single_meta(cl, target_url, a_list, s_list):
+                kind, cid = parse_url_type(target_url)
+                primary_al = a_list[0] if a_list else "ja-JP"
+                primary_sl = s_list[0] if s_list else "en-US"
                 api_audio = primary_al if primary_al.lower() not in {"all", "*"} else "ja-JP"
                 api_subs = primary_sl if primary_sl.lower() not in {"all", "*"} else "en-US"
                 avail_audios = []
+                poster = ""
+                description = ""
                 if kind == "episode":
-                    info = get_episode_info(client, cid)
+                    info = get_episode_info(cl, cid)
+                    sn_title = getattr(info.episode_metadata, "season_title", "") or f"Season {info.episode_metadata.season_number}"
                     seasons = [{
+                        "id": getattr(info.episode_metadata, "season_id", "") or f"sn-{info.episode_metadata.season_number}",
                         "season_number": info.episode_metadata.season_number,
-                        "title": getattr(info.episode_metadata, "season_title", "") or f"Season {info.episode_metadata.season_number}",
+                        "title": sn_title,
                         "episodes": [{
                             "id": cid,
                             "title": info.title,
                             "episode_number": info.episode_metadata.episode_number,
                             "season_number": info.episode_metadata.season_number,
                             "series_title": info.episode_metadata.series_title,
-                            "season_title": getattr(info.episode_metadata, "season_title", ""),
+                            "season_title": getattr(info.episode_metadata, "season_title", "") or sn_title,
                         }],
                     }]
                     title = info.episode_metadata.series_title
                     avail_audios = [v.audio_locale for v in info.episode_metadata.versions if v.audio_locale]
                 else:
-                    s = get_series(client, cid, api_audio, api_subs)
+                    s = get_series(cl, cid, api_audio, api_subs)
                     title = s.get("title", "")
+                    description = s.get("description", "")
+                    poster = s.get("poster", "")
                     seasons = []
                     seen_season_ids = set()
 
@@ -1024,9 +1097,74 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         })
                         if getattr(sn, "audio_locale", None) and sn.audio_locale not in avail_audios:
                             avail_audios.append(sn.audio_locale)
-                self._json({"success":True,"title":title,"seasons":seasons,"avail_audios":avail_audios})
+
+                return {
+                    "id": cid,
+                    "url": target_url,
+                    "kind": kind,
+                    "title": title or cid,
+                    "description": description,
+                    "poster": poster,
+                    "seasons": seasons,
+                    "avail_audios": avail_audios,
+                }
+
+            try:
+                client = CrunchyrollHttpClient()
+                al, sl = STATE["config"].get("audio_lang", "ja-JP"), STATE["config"].get("subs_lang", "en-US")
+                al_list = [x.strip() for x in al.split(",") if x.strip()]
+                sl_list = [x.strip() for x in sl.split(",") if x.strip()]
+
+                results: List[Dict[str, Any]] = []
+                errors: List[Dict[str, str]] = []
+
+                if len(clean_urls) == 1:
+                    try:
+                        res = _fetch_single_meta(client, clean_urls[0], al_list, sl_list)
+                        results.append(res)
+                    except Exception as e:
+                        logger.error("Fetch single anime failed for %s: %s", clean_urls[0], e, exc_info=True)
+                        self._json({"success": False, "error": str(e)}, 500)
+                        return
+                else:
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(clean_urls), 8)) as executor:
+                        future_to_url = {
+                            executor.submit(_fetch_single_meta, client, u, al_list, sl_list): u
+                            for u in clean_urls
+                        }
+                        for future in concurrent.futures.as_completed(future_to_url):
+                            u = future_to_url[future]
+                            try:
+                                res = future.result()
+                                results.append(res)
+                            except Exception as e:
+                                logger.warning("Failed fetching %s: %s", u, e)
+                                errors.append({"url": u, "error": str(e)})
+
+                    url_order = {u: idx for idx, u in enumerate(clean_urls)}
+                    results.sort(key=lambda r: url_order.get(r.get("url", ""), 999))
+
+                if not results:
+                    err_msg = "; ".join(e["error"] for e in errors) or "failed to fetch anime metadata"
+                    self._json({"success": False, "error": err_msg}, 500)
+                    return
+
+                first = results[0]
+                self._json({
+                    "success": True,
+                    "count": len(results),
+                    "animes": results,
+                    "errors": errors,
+                    # Backward-compatibility fields
+                    "title": first.get("title", ""),
+                    "description": first.get("description", ""),
+                    "poster": first.get("poster", ""),
+                    "seasons": first.get("seasons", []),
+                    "avail_audios": first.get("avail_audios", []),
+                })
             except Exception as e:
-                self._json({"success":False,"error":str(e)},500)
+                logger.error("Unexpected fetch error: %s", e, exc_info=True)
+                self._json({"success": False, "error": str(e)}, 500)
 
         elif path == "/api/download":
             if not is_authenticated():
@@ -1051,26 +1189,47 @@ class Handler(http.server.BaseHTTPRequestHandler):
             bitrate_mode = str(data.get("bitrate_mode") or c.get("bitrate_mode") or "highest").strip()
 
             dl_dir = str(data.get("download_dir") or c.get("download_dir") or DEFAULT_DOWNLOAD_DIR).strip() or DEFAULT_DOWNLOAD_DIR
-            task_title = str(data.get("task_title") or data.get("series_title") or "").strip()
-            enqueued = QUEUE.enqueue_batch(items, {
-                "video_quality": vq,
-                "audio_quality": aq,
-                "audio_lang": al,
-                "subs_lang": sl,
-                "force_download": fd,
-                "download_dir": dl_dir,
-                "workers": workers,
-                "enable_hedging": enable_hedging,
-                "enable_resume": enable_resume,
-                "bitrate_mode": bitrate_mode,
-            }, task_title=task_title)
+            default_task_title = str(data.get("task_title") or data.get("series_title") or "").strip()
+
+            # Group items by series title so each anime gets its own clean task in the queue
+            series_groups: Dict[str, List[Any]] = {}
+            for it in items:
+                st = ""
+                if isinstance(it, dict):
+                    st = str(it.get("series_title") or "").strip()
+                if not st:
+                    st = default_task_title or "Anime"
+                series_groups.setdefault(st, []).append(it)
+
+            all_enqueued = []
+            for s_name, s_items in series_groups.items():
+                batch_opts = {
+                    "video_quality": vq,
+                    "audio_quality": aq,
+                    "audio_lang": al,
+                    "subs_lang": sl,
+                    "force_download": fd,
+                    "download_dir": dl_dir,
+                    "workers": workers,
+                    "enable_hedging": enable_hedging,
+                    "enable_resume": enable_resume,
+                    "bitrate_mode": bitrate_mode,
+                }
+                enq = QUEUE.enqueue_batch(s_items, batch_opts, task_title=s_name)
+                all_enqueued.extend(enq)
+
             with LOCK:
                 STATE["download"]["status"] = "running"
+
+            msg = f"Added {len(all_enqueued)} episode(s) to queue"
+            if len(series_groups) > 1:
+                msg = f"Added {len(all_enqueued)} episode(s) across {len(series_groups)} anime to queue"
+
             self._json({
                 "success": True,
-                "enqueued_count": len(enqueued),
+                "enqueued_count": len(all_enqueued),
                 "queued_total": QUEUE.queued_count,
-                "message": f"Added {len(enqueued)} episode(s) to queue",
+                "message": msg,
             })
 
         elif path == "/api/download/pause":
@@ -1177,6 +1336,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 dl_dir = STATE["config"].get("download_dir") or DEFAULT_DOWNLOAD_DIR
                 active_job = QUEUE.active_job
                 active_ep_id = active_job.ep_id if active_job else None
+                queued_ep_ids = {j.ep_id for j in QUEUE.queue if j.ep_id}
+                protected_ep_ids = set(queued_ep_ids)
+                if active_ep_id:
+                    protected_ep_ids.add(active_ep_id)
 
             dl_dir = os.path.abspath(os.path.expanduser(dl_dir))
             partials_roots = [
@@ -1198,7 +1361,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     for ep_entry in os.scandir(root_dir):
                         if ep_entry.is_dir():
                             ep_id = ep_entry.name
-                            if active_ep_id and ep_id == active_ep_id:
+                            if ep_id in protected_ep_ids:
                                 skipped_active = True
                                 continue
                             ep_bytes = 0
@@ -1261,6 +1424,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             force = bool(data.get("force", False))
             update_info = check_for_updates(force=force)
             self._json({"success": True, **update_info})
+
+        elif path == "/api/stars":
+            force = bool(data.get("force", False))
+            stars = get_github_stars(force=force)
+            self._json({"success": True, "stars": stars})
 
         elif path.startswith("/api/"):
             self._json({"success": False, "error": f"Endpoint not found: {path}. If you recently updated, please restart web_gui.py."}, 404)

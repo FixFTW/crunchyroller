@@ -44,7 +44,7 @@
         <svg height="14" viewBox="0 0 16 16" width="14" fill="currentColor">
           <path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.751.751 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.751.751 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"></path>
         </svg>
-        <span>pls</span>
+        <span id="github-star-count" class="star-count" style="display:none;"></span>
       </a>
       <div class="badge" id="badge">
         <div class="dot"></div>
@@ -135,21 +135,74 @@
 
         <!-- Card 4: Download & Episode Tree -->
         <div class="card" id="download-card">
-          <div class="card-label">download</div>
-          <div class="row">
-            <input type="text" id="url" placeholder="paste a crunchyroll url">
-            <button id="fetch-btn" onclick="fetchUrl()">fetch</button>
+          <div class="dl-card-top-row">
+            <div class="card-label" style="margin-bottom:0;">anime & downloads</div>
+            <div class="input-mode-tabs">
+              <button type="button" id="tab-mode-search" class="mode-tab active" onclick="setInputMode('search')">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                search series
+              </button>
+              <button type="button" id="tab-mode-url" class="mode-tab" onclick="setInputMode('url')">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
+                paste url
+              </button>
+            </div>
           </div>
 
-          <label class="check-row" for="force-download">
+          <!-- Section 1: In-app search -->
+          <div id="search-section" class="input-mode-section">
+            <div class="row">
+              <div class="search-input-wrapper">
+                <svg class="search-input-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                <input type="text" id="search-input" placeholder="search anime by title (e.g. Chainsaw Man, Frieren, Solo Leveling...)" autocomplete="off">
+                <button type="button" id="search-clear-btn" class="search-clear-btn" onclick="clearSearch()" title="Clear search" style="display:none;">&times;</button>
+              </div>
+              <button type="button" id="search-btn" onclick="searchSeries()">search</button>
+            </div>
+
+            <div id="search-results-panel" style="display:none;">
+              <div class="search-results-header">
+                <span id="search-results-status" class="search-results-status"></span>
+                <div class="search-header-actions">
+                  <button type="button" class="btn-s" id="search-select-all-btn" onclick="toggleSelectAllSearchResults(true)">select all</button>
+                  <button type="button" class="btn-s" id="search-select-none-btn" onclick="toggleSelectAllSearchResults(false)" style="display:none;">none</button>
+                  <button type="button" class="btn-s btn-search-fetch-selected" id="search-fetch-selected-btn" onclick="fetchSelectedSearchAnime()" style="display:none;">fetch selected (0)</button>
+                  <button type="button" class="btn-s search-close-btn" onclick="closeSearchResults()">close</button>
+                </div>
+              </div>
+              <div id="search-results-list" class="search-results-grid"></div>
+            </div>
+          </div>
+
+          <!-- Section 2: Direct URL paste -->
+          <div id="url-section" class="input-mode-section" style="display:none;">
+            <div class="row row-url-input">
+              <textarea id="url" rows="1" placeholder="paste crunchyroll url(s) — one per line, or comma-separated" class="multi-url-input"></textarea>
+              <button type="button" id="fetch-btn" onclick="fetchUrl()">fetch</button>
+            </div>
+            <div class="url-input-hint">Tip: paste multiple anime URLs at once (one per line or comma-separated)</div>
+          </div>
+
+          <label class="check-row" for="force-download" style="margin-top:12px;">
             <input type="checkbox" id="force-download" onchange="saveCfg()">
             <span>force redownload and replace existing files</span>
           </label>
 
           <div id="tree">
             <hr class="div">
+            <div class="tree-summary-bar" id="tree-summary-bar" style="display:none;">
+              <div class="tree-summary-info" id="tree-summary-info"></div>
+              <button type="button" class="btn-s tree-clear-btn" onclick="clearTree()" title="Clear all fetched anime">clear list</button>
+            </div>
+            <div class="tree-series-header" id="tree-series-header" style="display:none;">
+              <img id="tree-poster" class="tree-poster" src="" alt="Series Poster" style="display:none;">
+              <div class="tree-series-info">
+                <div class="ser-title" id="ser-title"></div>
+                <div class="tree-series-badges" id="tree-series-badges"></div>
+                <div class="tree-series-desc" id="tree-series-desc"></div>
+              </div>
+            </div>
             <div class="ser-title-row">
-              <div class="ser-title" id="ser-title"></div>
               <div class="tree-header-actions">
                 <button class="btn-s" id="toggle-seasons-btn" onclick="toggleAllSeasons()">expand all</button>
                 <button class="btn-s" onclick="pickAll(true)">all</button>
