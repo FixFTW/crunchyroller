@@ -304,6 +304,7 @@ class DownloadQueue:
 
         # Batch counts for progress tracking
         self.completed_batch_count: int = 0
+        self.failed_batch_count: int = 0
         self.total_batch_count: int = 0
         self.last_status: str = "idle"
 
@@ -311,9 +312,32 @@ class DownloadQueue:
             persisted = self.state_store.load()
             self.rehydrate(persisted)
 
+    def _prune_all_items_map(self) -> None:
+        """Retain only items still referenced by tasks, active job, queue, or history."""
+        referenced_ids = set()
+        if self.active_job:
+            referenced_ids.add(self.active_job.id)
+        for j in self.queue:
+            referenced_ids.add(j.id)
+        for j in self.history:
+            referenced_ids.add(j.id)
+        for t in self.tasks.values():
+            referenced_ids.update(t.item_ids)
+
+        stale_keys = [k for k in self.all_items_map if k not in referenced_ids]
+        for k in stale_keys:
+            del self.all_items_map[k]
+
     def _snapshot(self) -> Dict[str, Any]:
         with self.lock:
-            q_list = [j.to_dict() for j in self.queue]
+            q_items = list(self.queue)
+            # Persist only unfinished active jobs (running or paused).
+            # Completed/failed/canceled jobs during client teardown are already
+            # in self.history and must NOT be added back into the saved queue.
+            if self.active_job and self.active_job.status in ("running", "paused"):
+                q_items = [self.active_job] + q_items
+
+            q_list = [j.to_dict() for j in q_items]
             h_list = [j.to_dict() for j in self.history[-self.max_history:]]
             t_list = [t.to_persisted_dict() for t in self.tasks.values()]
             return {
@@ -380,8 +404,11 @@ class DownloadQueue:
                 self.queue.append(it)
                 retried += 1
             if retried > 0:
-                self.total_batch_count += retried
+                self.failed_batch_count = max(0, self.failed_batch_count - retried)
+                self.total_batch_count = self.completed_batch_count + len(self.queue)
+                self.last_status = "running"
                 self.log(f"re-enqueued {retried} failed download(s)")
+                self._prune_all_items_map()
                 self._trigger_save()
                 self._ensure_worker_running()
             return retried
@@ -493,6 +520,7 @@ class DownloadQueue:
             if self.active_job is None and len(self.queue) == 1:
                 # Reset counters for a fresh batch
                 self.completed_batch_count = 0
+                self.failed_batch_count = 0
                 self.total_batch_count = 1
                 self.last_status = "running"
                 self.overall_pct = 0.0
@@ -514,6 +542,25 @@ class DownloadQueue:
     ) -> List[QueueItem]:
         """Enqueue multiple episodes sequentially under an anime task."""
         opts = default_options or {}
+
+        # If items span multiple distinct series and no explicit task_title was forced,
+        # split into per-series tasks so each anime has its own card in the queue.
+        distinct_titles: List[str] = []
+        for it in items:
+            if isinstance(it, dict):
+                st = str(it.get("series_title") or "").strip()
+                if st and st not in distinct_titles:
+                    distinct_titles.append(st)
+        if len(distinct_titles) > 1 and not task_title:
+            all_enq: List[QueueItem] = []
+            for st in distinct_titles:
+                sub_items = [it for it in items if isinstance(it, dict) and str(it.get("series_title") or "").strip() == st]
+                all_enq.extend(self.enqueue_batch(sub_items, default_options=default_options, task_title=st))
+            remaining = [it for it in items if not (isinstance(it, dict) and str(it.get("series_title") or "").strip() in distinct_titles)]
+            if remaining:
+                all_enq.extend(self.enqueue_batch(remaining, default_options=default_options, task_title="Anime"))
+            return all_enq
+
         anime_name = str(task_title or opts.get("task_title") or opts.get("series_title") or "").strip()
         if not anime_name and items and isinstance(items[0], dict):
             anime_name = str(items[0].get("series_title") or "").strip()
@@ -569,6 +616,7 @@ class DownloadQueue:
                         del self.tasks[target.task_id]
                 if target.id in self.all_items_map:
                     del self.all_items_map[target.id]
+                self._prune_all_items_map()
                 self.total_batch_count = max(
                     self.completed_batch_count + (1 if self.active_job else 0),
                     self.total_batch_count - 1,
@@ -581,6 +629,9 @@ class DownloadQueue:
                     task = self.tasks[self.active_job.task_id]
                     if self.active_job.id in task.item_ids:
                         task.item_ids.remove(self.active_job.id)
+                    if not task.item_ids:
+                        del self.tasks[self.active_job.task_id]
+                self._prune_all_items_map()
                 self.cancel_current(job_id=job_id)
                 self._trigger_save()
                 return True
@@ -590,12 +641,24 @@ class DownloadQueue:
         """Cancel/remove an entire anime task and its queued episodes."""
         with self.lock:
             if task_id not in self.tasks:
-                return False
+                # Idempotent cleanup: remove any orphaned pending queue items with this task_id
+                to_remove = [j for j in self.queue if j.task_id == task_id]
+                for j in to_remove:
+                    self.queue.remove(j)
+                    j.status = "canceled"
+                if self.active_job and self.active_job.task_id == task_id:
+                    self.cancel_current()
+                if to_remove:
+                    self.total_batch_count = max(self.completed_batch_count, self.total_batch_count - len(to_remove))
+                    self._prune_all_items_map()
+                    self._trigger_save()
+                return True
             task = self.tasks[task_id]
             active_id = self.active_job.id if self.active_job else None
-            if task.is_finished(self.all_items_map, active_job_id=active_id):
+            if task.is_finished(self.all_items_map, active_job_id=active_id) or task.status in ("completed", "canceled", "failed"):
                 del self.tasks[task_id]
                 self.log(f"Dismissed task: {task.series_title}")
+                self._prune_all_items_map()
                 self._trigger_save()
                 return True
 
@@ -614,6 +677,7 @@ class DownloadQueue:
 
             self.total_batch_count = max(self.completed_batch_count, self.total_batch_count - removed_count)
             self.log(f"Canceled task: {task.series_title} ({removed_count} item(s) removed)")
+            self._prune_all_items_map()
             self._trigger_save()
             return True
 
@@ -623,11 +687,15 @@ class DownloadQueue:
             active_id = self.active_job.id if self.active_job else None
             finished = [
                 tid for tid, t in self.tasks.items()
-                if t.is_finished(self.all_items_map, active_job_id=active_id) or len(t.item_ids) == 0
+                if t.is_finished(self.all_items_map, active_job_id=active_id)
+                or len(t.item_ids) == 0
+                or not any(iid in self.all_items_map for iid in t.item_ids)
+                or t.status in ("completed", "canceled", "failed")
             ]
             for tid in finished:
                 del self.tasks[tid]
             if finished:
+                self._prune_all_items_map()
                 self.log(f"Cleared {len(finished)} finished task(s).")
                 self._trigger_save()
             return len(finished)
@@ -645,6 +713,7 @@ class DownloadQueue:
                     j.status = "canceled"
                     self.queue.remove(j)
             self.tasks.clear()
+            self._prune_all_items_map()
             self.log(f"All tasks cleared ({count} task(s)).")
             self._trigger_save()
             return count
@@ -666,10 +735,14 @@ class DownloadQueue:
             active_id = self.active_job.id if self.active_job else None
             finished_tasks = [
                 tid for tid, t in self.tasks.items()
-                if t.is_finished(self.all_items_map, active_job_id=active_id) or len(t.item_ids) == 0
+                if t.is_finished(self.all_items_map, active_job_id=active_id)
+                or len(t.item_ids) == 0
+                or not any(iid in self.all_items_map for iid in t.item_ids)
+                or t.status in ("completed", "canceled", "failed")
             ]
             for tid in finished_tasks:
                 del self.tasks[tid]
+            self._prune_all_items_map()
             self.log(f"Queue cleared ({count} item(s) removed).")
             self._trigger_save()
             return count
@@ -741,6 +814,7 @@ class DownloadQueue:
         with self.lock:
             count = len(self.history)
             self.history.clear()
+            self._prune_all_items_map()
             self._trigger_save()
             return count
 
@@ -769,7 +843,7 @@ class DownloadQueue:
                     status = "paused" if not self.pause_event.is_set() else "running"
             elif len(self.queue) > 0:
                 status = "running"
-            elif self.last_status in ("canceled", "completed", "error"):
+            elif self.last_status in ("canceled", "completed", "error", "partial_error", "paused"):
                 status = self.last_status
             else:
                 status = "idle"
@@ -781,13 +855,28 @@ class DownloadQueue:
                 overall_pct = 100.0
                 track_pct = 100.0
                 episode_label = "all done"
+            elif status == "partial_error":
+                ep_idx = min(self.completed_batch_count + self.failed_batch_count, tot_batch)
+                overall_pct = round((self.completed_batch_count / tot_batch) * 100, 1) if tot_batch > 0 else 0.0
+                track_pct = 0.0
+                episode_label = f"Finished with errors ({self.completed_batch_count}/{tot_batch} done)"
+            elif status == "error":
+                ep_idx = min(self.failed_batch_count, tot_batch)
+                overall_pct = 0.0
+                track_pct = 0.0
+                episode_label = "Download failed"
             elif self.active_job:
                 episode_label = self.active_job.label
                 overall_pct = self.overall_pct
                 track_pct = self.track_pct
+            elif len(self.queue) > 0 and self.worker_thread and self.worker_thread.is_alive():
+                # Inter-episode cooldown
+                episode_label = f"Next up: {self.queue[0].label}"
+                overall_pct = self.overall_pct
+                track_pct = 0.0
             else:
                 episode_label = ""
-                overall_pct = 0.0
+                overall_pct = self.overall_pct if self.completed_batch_count > 0 else 0.0
                 track_pct = 0.0
 
             return {
@@ -886,14 +975,39 @@ class DownloadQueue:
                 time.sleep(0.2)
 
             with self.lock:
-                if self.cancel_all_flag or not self.queue:
+                if self.cancel_all_flag:
+                    if not self.queue:
+                        self.active_job = None
+                        self.last_status = "canceled"
+                        self.track = "canceled"
+                        self.speed = ""
+                        self.cancel_all_flag = False
+                        self.cancel_event.clear()
+                        self.worker_thread = None
+                        return
+                    else:
+                        # Cancellation of previous batch completed, and new jobs were enqueued!
+                        self.cancel_all_flag = False
+                        self.cancel_event.clear()
+                        self.completed_batch_count = 0
+                        self.failed_batch_count = 0
+                        self.total_batch_count = len(self.queue)
+                        self.last_status = "running"
+
+                if not self.queue:
                     self.active_job = None
-                    if self.completed_batch_count > 0 and not self.cancel_all_flag:
+                    if self.failed_batch_count > 0 and self.completed_batch_count == 0:
+                        self.last_status = "error"
+                        self.track = "error"
+                        self.speed = ""
+                    elif self.failed_batch_count > 0 and self.completed_batch_count > 0:
+                        self.last_status = "partial_error"
+                        self.track = f"{self.completed_batch_count} done, {self.failed_batch_count} failed"
+                        self.speed = ""
+                    elif self.completed_batch_count > 0:
                         self.last_status = "completed"
                         self.track = "done"
                         self.speed = ""
-                    elif self.cancel_all_flag:
-                        self.last_status = "canceled"
                     else:
                         self.last_status = "idle"
                     self.cancel_all_flag = False
@@ -1030,6 +1144,7 @@ class DownloadQueue:
                         self.history.append(job)
                         if len(self.history) > self.max_history:
                             self.history.pop(0)
+                        self._prune_all_items_map()
                     self._trigger_save()
                     self.log(f"done: {job.label} ({file_size_mb:.1f} MB)")
                 else:
@@ -1043,6 +1158,7 @@ class DownloadQueue:
                         self.history.append(job)
                         if len(self.history) > self.max_history:
                             self.history.pop(0)
+                        self._prune_all_items_map()
                         if not self.cancel_all_flag:
                             # Shrink total batch volume for canceled episode
                             self.total_batch_count = max(
@@ -1062,9 +1178,20 @@ class DownloadQueue:
                         job.status = "failed"
                         job.error = str(e)
                         job.finished_at = time.time()
+                        self.failed_batch_count += 1
                         self.history.append(job)
                         if len(self.history) > self.max_history:
                             self.history.pop(0)
+                        self._prune_all_items_map()
+                        tot_batch = max(1, self.total_batch_count)
+                        self.overall_pct = round((self.completed_batch_count / tot_batch) * 100, 1)
+                        if len(self.queue) > 0:
+                            self.last_status = "running"
+                        else:
+                            if self.completed_batch_count > 0:
+                                self.last_status = "partial_error"
+                            else:
+                                self.last_status = "error"
                     self._trigger_save()
                     logger.error("Download failed for %s: %s", job.label, e, exc_info=True)
                     self.log(f"failed: {job.label} — {e}")
