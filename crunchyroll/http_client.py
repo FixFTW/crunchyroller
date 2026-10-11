@@ -69,6 +69,14 @@ class CrunchyrollHttpClient:
             except Exception as e:
                 print(f"[auth] Failed to refresh web token from etp_rt: {e}")
 
+        # Fallback to anonymous guest token for catalog discovery if no valid user token
+        if not self.token:
+            try:
+                from .auth import get_guest_token
+                self.token = get_guest_token()
+            except Exception as e:
+                print(f"[auth] Failed to obtain guest token: {e}")
+
     def refresh_token(self) -> None:
         if self.android_refresh_token:
             self.refresh_android_token()
@@ -77,6 +85,17 @@ class CrunchyrollHttpClient:
                 self.token = get_access_token(self.etp_rt, force_refresh=True)
             except Exception as e:
                 print(f"[auth] Failed to refresh web token from etp_rt: {e}")
+                try:
+                    from .auth import get_guest_token
+                    self.token = get_guest_token(force_refresh=True)
+                except Exception:
+                    pass
+        else:
+            try:
+                from .auth import get_guest_token
+                self.token = get_guest_token(force_refresh=True)
+            except Exception:
+                pass
 
     def refresh_android_token(self) -> None:
         if self.android_refresh_token:
@@ -185,6 +204,14 @@ class CrunchyrollHttpClient:
                 self.refresh_token()
                 if self.token:
                     headers["Authorization"] = f"Bearer {self.token}"
+            else:
+                try:
+                    from .auth import get_guest_token
+                    self.token = get_guest_token(force_refresh=True)
+                    if self.token:
+                        headers["Authorization"] = f"Bearer {self.token}"
+                except Exception:
+                    pass
             retry_started = time.monotonic()
             try:
                 response = self.session.request(method, url, headers=headers, **kwargs)

@@ -513,7 +513,15 @@ def main() -> None:
             process_url(client, u, args)
             print()
     else:
-        process_url(client, args.url, args)
+        urls = [u.strip() for u in args.url.replace(",", "\n").splitlines() if u.strip()] if args.url else []
+        if len(urls) > 1:
+            print(f"Found {len(urls)} URLs to download\n")
+            for i, u in enumerate(urls):
+                print(f"=== [{i+1}/{len(urls)}] {u} ===")
+                process_url(client, u, args)
+                print()
+        elif urls:
+            process_url(client, urls[0], args)
 
 
 if __name__ == "__main__":

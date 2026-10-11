@@ -50,8 +50,16 @@ def _subtitle_locale(raw_key: object, raw_language: object) -> str:
 
 def parse_url_type(url: str) -> Tuple[str, str]:
     """figure out if the url is an episode, season, or series"""
-    clean_url = url.split("?")[0].split("#")[0]
+    clean_url = url.split("?")[0].split("#")[0].strip()
     parts = [p for p in clean_url.split("/") if p]
+
+    # Handle direct raw series/episode ID (e.g. GVDHX8QNW)
+    if len(parts) == 1 and "/" not in clean_url and "." not in clean_url and len(clean_url) >= 8:
+        return ("series", clean_url)
+
+    # Handle two-part shorthand like "series/GVDHX8QNW" or "watch/GEVUZM77J"
+    if len(parts) == 2 and parts[0] in ("series", "season", "episode", "watch"):
+        return ("episode" if parts[0] == "watch" else parts[0], parts[1])
 
     for i, part in enumerate(parts):
         if part in ("watch", "episode") and i + 1 < len(parts):
@@ -627,13 +635,131 @@ def get_series(
         eps = get_season_episodes(client, season.id, audio_locale, sub_locale)
         all_episodes.extend(eps)
 
+    poster = ""
+    images = series_meta.get("images", {})
+    if images and isinstance(images, dict):
+        for p_type in ("poster_tall", "poster_wide", "promo_image"):
+            groups = images.get(p_type, [])
+            if groups and isinstance(groups, list):
+                for group in groups:
+                    if isinstance(group, list):
+                        candidates = [c for c in group if isinstance(c, dict) and c.get("source")]
+                        if candidates:
+                            preferred = [c for c in candidates if 200 <= c.get("width", 0) <= 600]
+                            poster = preferred[0]["source"] if preferred else candidates[-1]["source"]
+                            break
+                if poster:
+                    break
+
     return {
         "id": series_id,
         "title": series_meta.get("title", ""),
         "description": series_meta.get("description", ""),
+        "poster": poster,
         "seasons": seasons,
         "episodes": all_episodes,
     }
+
+
+def search_series(
+    client: CrunchyrollHttpClient,
+    query: str,
+    limit: int = 15,
+    locale: str = "en-US",
+) -> List[Dict[str, Any]]:
+    """Search Crunchyroll for anime series matching `query`.
+
+    Returns a list of series items with id, title, description, poster, season/episode counts, etc.
+    """
+    clean_q = (query or "").strip()
+    if not clean_q:
+        return []
+
+    # Ensure client has an active token
+    if not client.token:
+        try:
+            from .auth import get_guest_token
+            client.token = get_guest_token()
+        except Exception:
+            pass
+
+    encoded_q = quote(clean_q)
+    target_limit = max(1, min(50, limit))
+
+    # Query discover search without type restriction to retrieve top_results, series, and movie_listing
+    url = f"https://www.crunchyroll.com/content/v2/discover/search?q={encoded_q}&n={target_limit}&locale={locale}"
+    resp = client.do_request("GET", url)
+    if resp.status_code != 200:
+        alt_url = f"https://beta-api.crunchyroll.com/content/v2/discover/search?q={encoded_q}&n={target_limit}&locale={locale}"
+        resp = client.do_request("GET", alt_url)
+        if resp.status_code != 200:
+            raise RuntimeError(f"Crunchyroll search failed ({resp.status_code}): {resp.text}")
+
+    data = resp.json()
+    results: List[Dict[str, Any]] = []
+    seen_ids = set()
+
+    for section in data.get("data", []):
+        for item in section.get("items", []):
+            item_id = item.get("id")
+            if not item_id or item_id in seen_ids:
+                continue
+
+            item_type = item.get("type", "series")
+            # Only include series and movie_listing items that can be fetched as series
+            if item_type not in ("series", "movie_listing"):
+                continue
+
+            seen_ids.add(item_id)
+            meta = item.get("series_metadata", {}) or {}
+            images = item.get("images", {}) or {}
+
+            # Poster resolution picker: prioritize ~240-480px tall posters
+            poster_url = ""
+            for p_type in ("poster_tall", "poster_wide", "promo_image"):
+                groups = images.get(p_type, [])
+                if groups and isinstance(groups, list):
+                    for group in groups:
+                        if isinstance(group, list):
+                            candidates = [c for c in group if isinstance(c, dict) and c.get("source")]
+                            if candidates:
+                                preferred = [c for c in candidates if 200 <= c.get("width", 0) <= 600]
+                                poster_url = preferred[0]["source"] if preferred else candidates[-1]["source"]
+                                break
+                    if poster_url:
+                        break
+
+            season_cnt = meta.get("season_count")
+            if season_cnt is None:
+                season_cnt = 1 if item_type == "movie_listing" else 0
+
+            ep_cnt = meta.get("episode_count")
+            if ep_cnt is None:
+                ep_cnt = 1 if item_type == "movie_listing" else 0
+
+            results.append({
+                "id": item_id,
+                "type": item_type,
+                "title": item.get("title", ""),
+                "description": item.get("description", "") or item.get("promo_description", ""),
+                "slug": item.get("slug_title", "") or item.get("slug", ""),
+                "poster": poster_url,
+                "season_count": int(season_cnt),
+                "episode_count": int(ep_cnt),
+                "is_mature": bool(meta.get("is_mature", False)),
+                "is_subbed": bool(meta.get("is_subbed", True)),
+                "is_dubbed": bool(meta.get("is_dubbed", False)),
+                "year": meta.get("series_launch_year"),
+                "audio_locales": meta.get("audio_locales", []),
+                "subtitle_locales": meta.get("subtitle_locales", []),
+            })
+
+            if len(results) >= target_limit:
+                break
+        if len(results) >= target_limit:
+            break
+
+    return results
 
 
 def delete_stream(

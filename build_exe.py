@@ -4,8 +4,10 @@ import subprocess
 import sys
 import zipfile
 
+from crunchyroll import __version__
+
 def build():
-    print("=== Building crunchyroller v3.6.0 Standalone Executable ===")
+    print(f"=== Building crunchyroller v{__version__} Standalone Executable ===")
     
     # 1. ensure pyinstaller is installed
     try:
@@ -237,14 +239,18 @@ NEED HELP?
     exe_path = os.path.join(dist_dir, "crunchyroller.exe")
     print(f"\nSuccess! Portable app built at:\n{exe_path}\nREADME generated at:\n{readme_path}")
 
-    # 4. create release zip archive
-    zip_name = "crunchyroller-v3.6.0-win64.zip"
+    # 4. create release zip archives (Full + No-FFmpeg)
+    zip_name = f"crunchyroller-v{__version__}-win64.zip"
+    zip_no_ffmpeg_name = f"crunchyroller-v{__version__}-win64-no-ffmpeg.zip"
     zip_path = os.path.join(root, zip_name)
+    zip_no_ffmpeg_path = os.path.join(root, zip_no_ffmpeg_name)
+
     if os.path.exists(zip_path):
         os.remove(zip_path)
+    if os.path.exists(zip_no_ffmpeg_path):
+        os.remove(zip_no_ffmpeg_path)
 
-    print(f"\nCompressing release into {zip_name}...")
-    
+    print(f"\nCompressing release into {zip_name} (with bundled FFmpeg)...")
     forbidden_files = {"client_id.bin", "private_key.pem", "config.json", ".env", "queue_state.json", "crunchyroller.log"}
     forbidden_exts = {".wvd", ".mkv", ".mp4", ".m4a", ".tmp"}
 
@@ -263,7 +269,27 @@ NEED HELP?
                 zipf.write(file_path, arcname)
 
     zip_size_mb = os.path.getsize(zip_path) / (1024 * 1024)
-    print(f"Created release zip: {zip_path} ({zip_size_mb:.1f} MB)")
+    print(f"Created full release zip: {zip_path} ({zip_size_mb:.1f} MB)")
+
+    print(f"\nCompressing lightweight release into {zip_no_ffmpeg_name} (no ffmpeg.exe)...")
+    with zipfile.ZipFile(zip_no_ffmpeg_path, "w", zipfile.ZIP_DEFLATED) as zipf_slim:
+        for folder_name, subfolders, filenames in os.walk(dist_dir):
+            if ".cr_partials" in folder_name:
+                continue
+            for filename in filenames:
+                lower_name = filename.lower()
+                if lower_name == "ffmpeg.exe":
+                    continue
+                _, ext = os.path.splitext(lower_name)
+                if lower_name in forbidden_files or ext in forbidden_exts:
+                    continue
+
+                file_path = os.path.join(folder_name, filename)
+                arcname = os.path.relpath(file_path, os.path.dirname(dist_dir))
+                zipf_slim.write(file_path, arcname)
+
+    zip_slim_size_mb = os.path.getsize(zip_no_ffmpeg_path) / (1024 * 1024)
+    print(f"Created no-ffmpeg release zip: {zip_no_ffmpeg_path} ({zip_slim_size_mb:.1f} MB)")
 
 if __name__ == "__main__":
     build()

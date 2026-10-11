@@ -187,6 +187,53 @@ def get_access_token(etp_rt: str, force_refresh: bool = False) -> str:
     with _TOKEN_CACHE_LOCK:
         _TOKEN_CACHE[etp_rt] = (token, now + max(10, expires_in - 30))
     return token
+
+
+def get_guest_token(force_refresh: bool = False) -> str:
+    """Fetch an anonymous client_credentials bearer token for public catalog browsing & search."""
+    now = time.time()
+    with _TOKEN_CACHE_LOCK:
+        if not force_refresh and "guest" in _TOKEN_CACHE:
+            cached_token, expire_at = _TOKEN_CACHE["guest"]
+            if now < expire_at:
+                return cached_token
+
+    url = "https://www.crunchyroll.com/auth/v1/token"
+    headers = {
+        "Authorization": "Basic bm9haWhkZXZtXzZpeWcwYThsMHE6",
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
+    }
+    data = {
+        "grant_type": "client_credentials",
+    }
+
+    try:
+        response = requests.post(url, headers=headers, data=data, timeout=20)
+        if response.status_code != 200:
+            # Fallback to Android TV client credentials
+            url_android = "https://beta-api.crunchyroll.com/auth/v1/token"
+            headers_android = {
+                "Authorization": ANDROID_BASIC_AUTH,
+                "Content-Type": "application/x-www-form-urlencoded",
+                "User-Agent": ANDROID_USER_AGENT,
+            }
+            response = requests.post(url_android, headers=headers_android, data=data, timeout=20)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to obtain guest token: {exc}")
+
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"Failed to get guest token (status {response.status_code}): {response.text}"
+        )
+
+    json_resp = response.json()
+    token = json_resp.get("access_token", "")
+    expires_in = int(json_resp.get("expires_in", 300))
+    with _TOKEN_CACHE_LOCK:
+        _TOKEN_CACHE["guest"] = (token, now + max(10, expires_in - 30))
+    return token
+
 ANDROID_BASIC_AUTH = "Basic ZXZ4YzVybGN1bnd4cm91YWpmeHI6NkJGWGM1SUk3UWx2Z3NFbzdiVjBuWUNfN1VRLXVlSVM="
 ANDROID_CLIENT_ID = "evxc5rlcunwxrouajfxr"
 ANDROID_CLIENT_SECRET = "6BFXc5II7QlvgsEo7bV0nYC_7UQ-ueIS"
