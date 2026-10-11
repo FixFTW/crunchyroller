@@ -1,9 +1,8 @@
 ### What's Changed in v3.7.0
 
-- **Multi-Anime Batch Fetching & Grouped Queue**: Enter multiple anime URLs at once (separated by commas or newlines), or select multiple series simultaneously from in-app search results. Each anime is automatically partitioned into its own distinct collapsible task card in the download queue.
-- **Queue Engine Hardening & Race Fixes**: Resolved stuck failure spinners on all-failed batches (`error`) and mixed batches (`partial_error`). Fixed a worker cancel/enqueue starvation race using generation tokens, protected queued partial downloads during cleanup, and fixed queue snapshot persistence across app restarts.
-- **Dual Release Packaging**: In addition to the standard full bundle with FFmpeg included, releases now provide a lightweight `no-ffmpeg` archive for users who already have FFmpeg installed in system PATH.
-- **Live Repository Star Counter**: Added a minimalist live star counter pill in the top navigation header with background caching and offline graceful fallback.
-- **Bundle Optimization**: Eliminated duplicate bundled FFmpeg binaries in release distributions, significantly cutting unneeded package weight.
+- **Multi-Anime Batch Fetch**: Paste multiple anime URLs or multi-select search results to fetch and download at once, automatically grouped into separate queue tasks.
+- **Fixed Task Clearing & Dismissal**: Fixed an issue where completed or failed tasks could not be cleared or dismissed from the queue drawer.
+- **Queue Stability Fixes**: Fixed stuck failure spinners, cancel/enqueue worker races, retry counters, and restart recovery.
+- **Lightweight Archive Option**: Added a `no-ffmpeg` build option for users who already have FFmpeg in system PATH.
 
 **Full Changelog**: https://github.com/Vure-sh/crunchyroller/compare/v3.6.0...v3.7.0
