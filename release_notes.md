@@ -1,8 +1,9 @@
-### What's Changed in v3.6.0
+### What's Changed in v3.7.0
 
-- **Audio & Subtitle Only Download Mode (Closes #15)**: Added an option to download audio tracks and subtitles without video. Simply select "audio only (no video)" from the Video Quality dropdown. You can change the audio & subtitle format (.mka, .mkv, or standalone .m4a with subtitle files) directly in Settings.
-- **Anti-RateLimit Safe Mode & Pacing Controls (Addresses #14)**: Added configurable delay between episode downloads (default 60s, with ±5s jitter) and optional thread reduction to protect against KAT-3002 temporary blocks.
-- **Redesigned History View**: Upgraded to a clean two-line layout showing series title, season/episode tags, episode title, quality, relative timestamp, file size, status pill, and a one-click show-in-folder button.
-- **Enhanced Progress & Phase Tracking**: Displays live percentage indicators on sub-bars and detailed phase logging.
+- **Multi-Anime Batch Fetching & Grouped Queue**: Enter multiple anime URLs at once (separated by commas or newlines), or select multiple series simultaneously from in-app search results. Each anime is automatically partitioned into its own distinct collapsible task card in the download queue.
+- **Queue Engine Hardening & Race Fixes**: Resolved stuck failure spinners on all-failed batches (`error`) and mixed batches (`partial_error`). Fixed a worker cancel/enqueue starvation race using generation tokens, protected queued partial downloads during cleanup, and fixed queue snapshot persistence across app restarts.
+- **Dual Release Packaging**: In addition to the standard full bundle with FFmpeg included, releases now provide a lightweight `no-ffmpeg` archive for users who already have FFmpeg installed in system PATH.
+- **Live Repository Star Counter**: Added a minimalist live star counter pill in the top navigation header with background caching and offline graceful fallback.
+- **Bundle Optimization**: Eliminated duplicate bundled FFmpeg binaries in release distributions, significantly cutting unneeded package weight.
 
-**Full Changelog**: https://github.com/Vure-sh/crunchyroller/compare/v3.5.1...v3.6.0
+**Full Changelog**: https://github.com/Vure-sh/crunchyroller/compare/v3.6.0...v3.7.0

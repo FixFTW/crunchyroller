@@ -5,10 +5,6 @@ from PyInstaller.utils.hooks import collect_all
 base_dir = os.path.abspath(SPECPATH)
 
 datas = [(os.path.join(base_dir, 'web'), 'web')]
-if os.path.exists(os.path.join(base_dir, 'ffmpeg.exe')):
-    datas.append((os.path.join(base_dir, 'ffmpeg.exe'), '.'))
-if os.path.exists(os.path.join(base_dir, 'ffmpeg')):
-    datas.append((os.path.join(base_dir, 'ffmpeg'), '.'))
 
 binaries = []
 hiddenimports = [

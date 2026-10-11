@@ -57,8 +57,8 @@ def build():
         print(f"Copying bin directory to {bin_dst}...")
         shutil.copytree(bin_src, bin_dst, dirs_exist_ok=True)
 
-    readme_content = """========================================================================
-                      CRUNCHYROLLER v3.6.0
+    readme_content = f"""========================================================================
+                      CRUNCHYROLLER v{__version__}
 ========================================================================
 
 HOW TO RUN:
@@ -80,14 +80,36 @@ REQUIREMENTS:
    * Note: Widevine keys are NOT bundled with this release for legal reasons.
      Search online for "ready to use CDMs" or extract keys via Android Studio.
 
-2. FFMPEG (INCLUDED):
-   'ffmpeg.exe' is already pre-packaged in this folder.
-   You DO NOT need to install FFmpeg separately.
+2. FFMPEG:
+   - Full Release: 'ffmpeg.exe' is already pre-packaged in this folder.
+   - No-FFmpeg Release: Requires FFmpeg installed and accessible in your system PATH.
 
 3. MICROSOFT EDGE WEBVIEW2:
    Required to display the native app window.
    If WebView2 is missing on your PC, the app will show a prompt to download
    and install it automatically from Microsoft.
+
+------------------------------------------------------------------------
+WHAT'S NEW IN v3.7.0:
+------------------------------------------------------------------------
+- Multi-Anime Batch Fetching & Grouped Queue:
+  Enter multiple anime URLs at once (separated by commas or newlines), or select
+  multiple series simultaneously from in-app search results. Each anime is
+  automatically partitioned into its own distinct collapsible task card in the
+  download queue.
+- Queue Engine Hardening & Race Fixes:
+  Resolved stuck failure spinners on all-failed batches (error) and mixed batches
+  (partial_error). Fixed worker cancel/enqueue starvation race using generation tokens,
+  protected queued partial downloads during cleanup, and fixed queue snapshots.
+- Dual Release Packaging:
+  Now offering both standard full Windows builds (with bundled FFmpeg) and lightweight
+  no-ffmpeg archives for users with existing FFmpeg PATH installations.
+- Live Repository Star Counter:
+  Added a minimalist live star counter pill in the top navigation header with
+  background caching and offline graceful fallback.
+- Bundle Optimization:
+  Eliminated duplicate bundled FFmpeg binaries in release distributions,
+  significantly cutting unneeded package weight.
 
 ------------------------------------------------------------------------
 WHAT'S NEW IN v3.6.0:

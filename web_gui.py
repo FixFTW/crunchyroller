@@ -1174,6 +1174,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not items:
                 self._json({"success": False, "error": "select some episodes"}, 400)
                 return
+
+            # Upfront check for FFmpeg so no-ffmpeg users get an immediate clear error before downloading
+            try:
+                from crunchyroll.merger import find_ffmpeg
+                find_ffmpeg()
+            except FileNotFoundError as e:
+                self._json({"success": False, "error": str(e)}, 400)
+                return
+
             c = STATE["config"]
             vq = data.get("video_quality", c["video_quality"])
             aq = data.get("audio_quality", c["audio_quality"])
