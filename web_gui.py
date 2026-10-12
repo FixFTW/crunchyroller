@@ -417,7 +417,9 @@ def _run_download(items, vq, aq, al, sl, force_download=False):
             _log("download resumed.")
 
         if idx > 0:
-            time.sleep(random.uniform(1.5, 3.0))
+            cooldown_time = random.uniform(45.0, 75.0)
+            _log(f"Cooling down for {cooldown_time:.1f}s before next episode to mitigate CDN rate-limits...")
+            time.sleep(cooldown_time)
         ep_id = item.get("id") if isinstance(item, dict) else item
         try:
             info = get_episode_info(client, ep_id)
@@ -496,7 +498,7 @@ def _run_download(items, vq, aq, al, sl, force_download=False):
                     min_workers=1 if workers_cnt <= 2 else max(2, workers_cnt // 2),
                     max_workers=workers_cnt,
                     initial_workers=workers_cnt,
-                    pool_size=max(4, min(64, workers_cnt * 2)),
+                    pool_size=max(32, min(64, workers_cnt * 2)),
                     hedging_enabled=hedging,
                 ),
             )
