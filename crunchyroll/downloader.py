@@ -1163,7 +1163,7 @@ def download_episode(
                 v_base = locale_base(getattr(v, "audio_locale", "") or "").lower()
                 if v_base in missing_cc_bases:
                     return 0
-                if (getattr(v, "audio_locale", "") or "").lower() == "ja-jp":
+                if (getattr(v, "audtime.sleepio_locale", "") or "").lower() == "ja-jp":
                     return 1
                 return 2
 
@@ -1173,7 +1173,7 @@ def download_episode(
             for v_idx, version in enumerate(candidate_versions):
                 print(f"Checking subtitle source: {track_title(version.audio_locale)}...")
                 if v_idx > 0:
-                    time.sleep(0.5)
+                    time.sleep(1.5)
                 v_ep = get_episode(
                     client,
                     version.guid,
@@ -2062,7 +2062,7 @@ def _download_episode_n_m3u8dl_re(
             for v_idx, version in enumerate(candidate_versions):
                 print(f"Checking subtitle source: {track_title(version.audio_locale)}...")
                 if v_idx > 0:
-                    time.sleep(0.5)
+                    time.sleep(1.5)
                 v_ep = get_episode(
                     client,
                     version.guid,
