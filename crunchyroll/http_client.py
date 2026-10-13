@@ -131,6 +131,12 @@ class CrunchyrollHttpClient:
         **kwargs,
     ) -> requests.Response:
         RateLimitGate.wait_if_blocked()
+
+        # Global pacing for sensitive playback endpoints to prevent HTTP 420 rate limits
+        if "/play" in url or "/manifest" in url or "/license" in url:
+            print("[http] Pacing request to prevent HTTP 420...", flush=True)
+            time.sleep(1.5)
+
         # Tolerate callers forwarding cancel_event inside kwargs (e.g. pooled
         # helpers) so it never leaks into requests' session.request().
         if cancel_event is None:
