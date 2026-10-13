@@ -1163,7 +1163,7 @@ def download_episode(
                 v_base = locale_base(getattr(v, "audio_locale", "") or "").lower()
                 if v_base in missing_cc_bases:
                     return 0
-                if (getattr(v, "audtime.sleepio_locale", "") or "").lower() == "ja-jp":
+                if (getattr(v, "audio_locale", "") or "").lower() == "ja-jp":
                     return 1
                 return 2
 
