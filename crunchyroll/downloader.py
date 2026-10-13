@@ -1173,7 +1173,7 @@ def download_episode(
             for v_idx, version in enumerate(candidate_versions):
                 print(f"Checking subtitle source: {track_title(version.audio_locale)}...")
                 # Enforce a 1.5s delay before every single version request to stay below the API threshold
-                    time.sleep(1.5)
+                time.sleep(1.5)
                 v_ep = get_episode(
                     client,
                     version.guid,
@@ -2062,7 +2062,7 @@ def _download_episode_n_m3u8dl_re(
             for v_idx, version in enumerate(candidate_versions):
                 print(f"Checking subtitle source: {track_title(version.audio_locale)}...")
                 # Enforce a 1.5s delay before every single version request to stay below the API threshold
-                    time.sleep(1.5)
+                time.sleep(1.5)
                 v_ep = get_episode(
                     client,
                     version.guid,
